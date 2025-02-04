@@ -577,6 +577,10 @@ export const createInternalAdapter = (
 						value: email.toLowerCase(),
 						field: "email",
 					},
+					{
+						value: process.env.WEBSITE_DOMAIN,
+						field: "websiteDomain",
+					},
 				],
 			});
 			if (!user) return null;
