@@ -374,6 +374,10 @@ export const createInternalAdapter = (
 						value: userIds,
 						operator: "in",
 					},
+					{
+						value: process.env.WEBSITE_DOMAIN ?? "",
+						field: "websiteDomain",
+					},
 				],
 			});
 			return sessions.map((session) => {
@@ -521,6 +525,10 @@ export const createInternalAdapter = (
 						value: email.toLowerCase(),
 						field: "email",
 					},
+					{
+						value: process.env.WEBSITE_DOMAIN ?? "",
+						field: "websiteDomain",
+					},
 				],
 			});
 			if (!user) {
@@ -578,7 +586,7 @@ export const createInternalAdapter = (
 						field: "email",
 					},
 					{
-						value: process.env.WEBSITE_DOMAIN,
+						value: process.env.WEBSITE_DOMAIN ?? "",
 						field: "websiteDomain",
 					},
 				],
@@ -591,6 +599,10 @@ export const createInternalAdapter = (
 						{
 							value: user.id,
 							field: "userId",
+						},
+						{
+							value: process.env.WEBSITE_DOMAIN ?? "",
+							field: "websiteDomain",
 						},
 					],
 				});
@@ -688,6 +700,10 @@ export const createInternalAdapter = (
 						field: "userId",
 						value: userId,
 					},
+					{
+						value: process.env.WEBSITE_DOMAIN ?? "",
+						field: "websiteDomain",
+					},
 				],
 			});
 			return accounts;
@@ -700,6 +716,10 @@ export const createInternalAdapter = (
 						field: "accountId",
 						value: accountId,
 					},
+					{
+						value: process.env.WEBSITE_DOMAIN ?? "",
+						field: "websiteDomain",
+					},
 				],
 			});
 			return account;
@@ -711,6 +731,10 @@ export const createInternalAdapter = (
 					{
 						field: "userId",
 						value: userId,
+					},
+					{
+						value: process.env.WEBSITE_DOMAIN ?? "",
+						field: "websiteDomain",
 					},
 				],
 			});
