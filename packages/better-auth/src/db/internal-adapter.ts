@@ -553,8 +553,13 @@ export const createInternalAdapter = (
 							value: account.userId,
 							field: "id",
 						},
+						{
+							value: process.env.WEBSITE_DOMAIN ?? "",
+							field: "websiteDomain",
+						},
 					],
 				});
+				if (!user) return null;
 				return {
 					user: user!,
 					accounts: [account],
