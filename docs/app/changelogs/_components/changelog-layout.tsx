@@ -2,7 +2,6 @@ import Link from "next/link";
 import { useId } from "react";
 
 import clsx from "clsx";
-import { Logo } from "@/components/logo";
 import { DiscordLogoIcon } from "@radix-ui/react-icons";
 
 function BookIcon(props: React.ComponentPropsWithoutRef<"svg">) {
@@ -70,7 +69,7 @@ export function Intro() {
 					GitHub
 				</IconLink>
 				<IconLink
-					href="https://discord.gg/GYC3W7tZzb"
+					href="https://discord.com/better-auth"
 					icon={DiscordLogoIcon}
 					className="flex-none text-gray-600 dark:text-gray-300"
 				>

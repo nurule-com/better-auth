@@ -1,5 +1,4 @@
 // @vitest-environment happy-dom
-
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createAuthClient as createSolidClient } from "./solid";
 import { createAuthClient as createReactClient } from "./react";
@@ -183,7 +182,9 @@ describe("type", () => {
 				},
 			},
 		});
-		expectTypeOf(client.useComputedAtom).toEqualTypeOf<Readonly<Ref<number>>>();
+		expectTypeOf(client.useComputedAtom).toEqualTypeOf<
+			() => Readonly<Ref<number>>
+		>();
 	});
 	it("should infer resolved hooks svelte", () => {
 		const client = createSvelteClient({

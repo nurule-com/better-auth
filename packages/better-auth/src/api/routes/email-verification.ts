@@ -7,6 +7,8 @@ import type { GenericEndpointContext, User } from "../../types";
 import { BASE_ERROR_CODES } from "../../error/codes";
 import { jwtVerify, type JWTPayload, type JWTVerifyResult } from "jose";
 import { signJWT } from "../../crypto/jwt";
+import { originCheck } from "../middlewares";
+import { JWTExpired } from "jose/errors";
 
 export async function createEmailVerificationToken(
 	secret: string,
@@ -15,6 +17,10 @@ export async function createEmailVerificationToken(
 	 * The email to update from
 	 */
 	updateTo?: string,
+	/**
+	 * The time in seconds for the token to expire
+	 */
+	expiresIn: number = 3600,
 ) {
 	const token = await signJWT(
 		{
@@ -22,6 +28,7 @@ export async function createEmailVerificationToken(
 			updateTo,
 		},
 		secret,
+		expiresIn,
 	);
 	return token;
 }
@@ -42,9 +49,11 @@ export async function sendVerificationEmailFn(
 	const token = await createEmailVerificationToken(
 		ctx.context.secret,
 		user.email,
+		undefined,
+		ctx.context.options.emailVerification?.expiresIn,
 	);
 	const url = `${ctx.context.baseURL}/verify-email?token=${token}&callbackURL=${
-		ctx.body.callbackURL || ctx.query?.currentURL || "/"
+		ctx.body.callbackURL || "/"
 	}`;
 	await ctx.context.options.emailVerification.sendVerificationEmail(
 		{
@@ -55,20 +64,10 @@ export async function sendVerificationEmailFn(
 		ctx.request,
 	);
 }
-
 export const sendVerificationEmail = createAuthEndpoint(
 	"/send-verification-email",
 	{
 		method: "POST",
-		query: z
-			.object({
-				currentURL: z
-					.string({
-						description: "The URL to use for email verification callback",
-					})
-					.optional(),
-			})
-			.optional(),
 		body: z.object({
 			email: z
 				.string({
@@ -93,11 +92,14 @@ export const sendVerificationEmail = createAuthEndpoint(
 									email: {
 										type: "string",
 										description: "The email to send the verification email to",
+										example: "user@example.com",
 									},
 									callbackURL: {
 										type: "string",
 										description:
 											"The URL to use for email verification callback",
+										example: "https://example.com/callback",
+										nullable: true,
 									},
 								},
 								required: ["email"],
@@ -115,6 +117,26 @@ export const sendVerificationEmail = createAuthEndpoint(
 									properties: {
 										status: {
 											type: "boolean",
+											description:
+												"Indicates if the email was sent successfully",
+											example: true,
+										},
+									},
+								},
+							},
+						},
+					},
+					"400": {
+						description: "Bad Request",
+						content: {
+							"application/json": {
+								schema: {
+									type: "object",
+									properties: {
+										message: {
+											type: "string",
+											description: "Error message",
+											example: "Verification email isn't enabled",
 										},
 									},
 								},
@@ -160,9 +182,30 @@ export const verifyEmail = createAuthEndpoint(
 				})
 				.optional(),
 		}),
+		use: [originCheck((ctx) => ctx.query.callbackURL)],
 		metadata: {
 			openapi: {
 				description: "Verify the email of the user",
+				parameters: [
+					{
+						name: "token",
+						in: "query",
+						description: "The token to verify the email",
+						required: true,
+						schema: {
+							type: "string",
+						},
+					},
+					{
+						name: "callbackURL",
+						in: "query",
+						description: "The URL to redirect to after email verification",
+						required: false,
+						schema: {
+							type: "string",
+						},
+					},
+				],
 				responses: {
 					"200": {
 						description: "Success",
@@ -173,12 +216,54 @@ export const verifyEmail = createAuthEndpoint(
 									properties: {
 										user: {
 											type: "object",
+											properties: {
+												id: {
+													type: "string",
+													description: "User ID",
+												},
+												email: {
+													type: "string",
+													description: "User email",
+												},
+												name: {
+													type: "string",
+													description: "User name",
+												},
+												image: {
+													type: "string",
+													description: "User image URL",
+												},
+												emailVerified: {
+													type: "boolean",
+													description:
+														"Indicates if the user email is verified",
+												},
+												createdAt: {
+													type: "string",
+													description: "User creation date",
+												},
+												updatedAt: {
+													type: "string",
+													description: "User update date",
+												},
+											},
+											required: [
+												"id",
+												"email",
+												"name",
+												"image",
+												"emailVerified",
+												"createdAt",
+												"updatedAt",
+											],
 										},
 										status: {
 											type: "boolean",
+											description:
+												"Indicates if the email was verified successfully",
 										},
+										required: ["user", "status"],
 									},
-									required: ["user", "status"],
 								},
 							},
 						},
@@ -210,7 +295,9 @@ export const verifyEmail = createAuthEndpoint(
 				},
 			);
 		} catch (e) {
-			ctx.context.logger.error("Failed to verify email", e);
+			if (e instanceof JWTExpired) {
+				return redirectOnError("token_expired");
+			}
 			return redirectOnError("invalid_token");
 		}
 		const schema = z.object({
@@ -245,6 +332,7 @@ export const verifyEmail = createAuthEndpoint(
 					email: parsed.updateTo,
 					emailVerified: false,
 				},
+				ctx,
 			);
 
 			const newToken = await createEmailVerificationToken(
@@ -256,35 +344,79 @@ export const verifyEmail = createAuthEndpoint(
 			await ctx.context.options.emailVerification?.sendVerificationEmail?.(
 				{
 					user: updatedUser,
-					url: `${ctx.context.baseURL}/verify-email?token=${newToken}`,
+					url: `${
+						ctx.context.baseURL
+					}/verify-email?token=${newToken}&callbackURL=${
+						ctx.query.callbackURL || "/"
+					}`,
 					token: newToken,
 				},
 				ctx.request,
 			);
+
+			await setSessionCookie(ctx, {
+				session: session.session,
+				user: {
+					...session.user,
+					email: parsed.updateTo,
+					emailVerified: false,
+				},
+			});
 
 			if (ctx.query.callbackURL) {
 				throw ctx.redirect(ctx.query.callbackURL);
 			}
 			return ctx.json({
 				status: true,
+				user: {
+					id: updatedUser.id,
+					email: updatedUser.email,
+					name: updatedUser.name,
+					image: updatedUser.image,
+					emailVerified: updatedUser.emailVerified,
+					createdAt: updatedUser.createdAt,
+					updatedAt: updatedUser.updatedAt,
+				},
 			});
 		}
-		await ctx.context.internalAdapter.updateUserByEmail(parsed.email, {
-			emailVerified: true,
-		});
+		await ctx.context.options.emailVerification?.onEmailVerification?.(
+			user.user,
+			ctx.request,
+		);
+		await ctx.context.internalAdapter.updateUserByEmail(
+			parsed.email,
+			{
+				emailVerified: true,
+			},
+			ctx,
+		);
 		if (ctx.context.options.emailVerification?.autoSignInAfterVerification) {
 			const currentSession = await getSessionFromCtx(ctx);
 			if (!currentSession || currentSession.user.email !== parsed.email) {
 				const session = await ctx.context.internalAdapter.createSession(
 					user.user.id,
-					ctx.request,
+					ctx.headers,
 				);
 				if (!session) {
 					throw new APIError("INTERNAL_SERVER_ERROR", {
 						message: "Failed to create session",
 					});
 				}
-				await setSessionCookie(ctx, { session, user: user.user });
+				await setSessionCookie(ctx, {
+					session,
+					user: {
+						...user.user,
+						emailVerified: true,
+					},
+				});
+			} else {
+				await setSessionCookie(ctx, {
+					session: currentSession.session,
+					user: {
+						...currentSession.user,
+						emailVerified: true,
+					},
+				});
 			}
 		}
 
@@ -293,6 +425,7 @@ export const verifyEmail = createAuthEndpoint(
 		}
 		return ctx.json({
 			status: true,
+			user: null,
 		});
 	},
 );

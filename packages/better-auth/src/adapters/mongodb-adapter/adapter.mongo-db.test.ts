@@ -4,7 +4,6 @@ import { MongoClient } from "mongodb";
 import { runAdapterTest } from "../test";
 import { mongodbAdapter } from ".";
 import { getTestInstance } from "../../test-utils/test-instance";
-
 describe("adapter test", async () => {
 	const dbClient = async (connectionString: string, dbName: string) => {
 		const client = new MongoClient(connectionString);
@@ -45,7 +44,9 @@ describe("adapter test", async () => {
 				...customOptions,
 			});
 		},
-		skipGenerateIdTest: true,
+		disableTests: {
+			SHOULD_PREFER_GENERATE_ID_IF_PROVIDED: true,
+		},
 	});
 });
 

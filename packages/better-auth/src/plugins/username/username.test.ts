@@ -6,7 +6,11 @@ import { usernameClient } from "./client";
 describe("username", async (it) => {
 	const { client, sessionSetter } = await getTestInstance(
 		{
-			plugins: [username()],
+			plugins: [
+				username({
+					minUsernameLength: 4,
+				}),
+			],
 		},
 		{
 			clientOptions: {
@@ -15,12 +19,12 @@ describe("username", async (it) => {
 		},
 	);
 
-	it("should signup with username", async () => {
+	it("should sign up with username", async () => {
 		const headers = new Headers();
-		const res = await client.signUp.email(
+		await client.signUp.email(
 			{
 				email: "new-email@gamil.com",
-				username: "new-username",
+				username: "new_username",
 				password: "new-password",
 				name: "new-name",
 			},
@@ -34,13 +38,13 @@ describe("username", async (it) => {
 				throw: true,
 			},
 		});
-		expect(session?.user.username).toBe("new-username");
+		expect(session?.user.username).toBe("new_username");
 	});
 	const headers = new Headers();
 	it("should sign-in with username", async () => {
 		const res = await client.signIn.username(
 			{
-				username: "new-username",
+				username: "new_username",
 				password: "new-password",
 			},
 			{
@@ -51,7 +55,7 @@ describe("username", async (it) => {
 	});
 	it("should update username", async () => {
 		const res = await client.updateUser({
-			username: "new-username-2",
+			username: "new_username_2.1",
 			fetchOptions: {
 				headers,
 			},
@@ -63,14 +67,46 @@ describe("username", async (it) => {
 				throw: true,
 			},
 		});
-		expect(session?.user.username).toBe("new-username-2");
+		expect(session?.user.username).toBe("new_username_2.1");
 	});
 
 	it("should fail on duplicate username", async () => {
 		const res = await client.signUp.email({
 			email: "new-email-2@gamil.com",
-			username: "New-username-2",
-			password: "new-password",
+			username: "New_username_2.1",
+			password: "new_password",
+			name: "new-name",
+		});
+		expect(res.error?.status).toBe(422);
+	});
+
+	it("should fail on invalid username", async () => {
+		const res = await client.signUp.email({
+			email: "email-4@email.com",
+			username: "new username",
+			password: "new_password",
+			name: "new-name",
+		});
+		expect(res.error?.status).toBe(422);
+		expect(res.error?.code).toBe("USERNAME_IS_INVALID");
+	});
+
+	it("should fail on too short username", async () => {
+		const res = await client.signUp.email({
+			email: "email-4@email.com",
+			username: "new",
+			password: "new_password",
+			name: "new-name",
+		});
+		expect(res.error?.status).toBe(422);
+		expect(res.error?.code).toBe("USERNAME_IS_TOO_SHORT");
+	});
+
+	it("should fail on empty username", async () => {
+		const res = await client.signUp.email({
+			email: "email-4@email.com",
+			username: "",
+			password: "new_password",
 			name: "new-name",
 		});
 		expect(res.error?.status).toBe(422);

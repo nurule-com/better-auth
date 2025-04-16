@@ -42,7 +42,7 @@ vi.mock("../../oauth2", async (importOriginal) => {
 });
 
 describe("oauth-proxy", async () => {
-	const { client, auth } = await getTestInstance({
+	const { client } = await getTestInstance({
 		plugins: [
 			oAuthProxy({
 				currentURL: "http://preview-localhost:3000",
@@ -81,6 +81,7 @@ describe("oauth-proxy", async () => {
 			},
 		});
 	});
+
 	it("shouldn't redirect to proxy url on same origin", async () => {
 		const { client } = await getTestInstance({
 			plugins: [oAuthProxy()],

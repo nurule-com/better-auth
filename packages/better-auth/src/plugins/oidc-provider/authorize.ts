@@ -2,7 +2,6 @@ import { APIError } from "better-call";
 import type { GenericEndpointContext } from "../../types";
 import { getSessionFromCtx } from "../../api";
 import type { AuthorizationQuery, Client, OIDCOptions } from "./types";
-import { schema } from "./schema";
 import { generateRandomString } from "../../crypto";
 
 function redirectErrorURL(url: string, error: string, description: string) {
@@ -45,6 +44,8 @@ export async function authorize(
 			ctx.context.secret,
 			{
 				maxAge: 600,
+				path: "/",
+				sameSite: "lax",
 			},
 		);
 		const queryFromURL = ctx.request.url?.split("?")[1];
@@ -142,6 +143,10 @@ export async function authorize(
 		);
 	}
 
+	if (!query.code_challenge_method) {
+		query.code_challenge_method = "plain";
+	}
+
 	if (
 		![
 			"s256",
@@ -187,6 +192,7 @@ export async function authorize(
 				state: query.prompt === "consent" ? query.state : null,
 				codeChallenge: query.code_challenge,
 				codeChallengeMethod: query.code_challenge_method,
+				nonce: query.nonce,
 			}),
 			identifier: code,
 			expiresAt,
@@ -234,6 +240,8 @@ export async function authorize(
 	if (options?.consentPage) {
 		await ctx.setSignedCookie("oidc_consent_prompt", code, ctx.context.secret, {
 			maxAge: 600,
+			path: "/",
+			sameSite: "lax",
 		});
 		const conceptURI = `${options.consentPage}?client_id=${
 			client.clientId

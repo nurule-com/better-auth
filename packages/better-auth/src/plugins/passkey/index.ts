@@ -22,16 +22,21 @@ import type {
 	AuthPluginSchema,
 } from "../../types/plugins";
 import { setSessionCookie } from "../../cookies";
-import { BetterAuthError } from "../../error";
-import { env } from "../../utils/env";
 import { generateId } from "../../utils";
 import { mergeSchema } from "../../db/schema";
+import { base64 } from "@better-auth/utils/base64";
 
 interface WebAuthnChallengeValue {
 	expectedChallenge: string;
 	userData: {
 		id: string;
 	};
+}
+
+function getRpID(options: PasskeyOptions, baseURL?: string) {
+	return (
+		options.rpID || (baseURL ? new URL(baseURL).hostname : "localhost") // default rpID
+	);
 }
 
 export interface PasskeyOptions {
@@ -50,13 +55,20 @@ export interface PasskeyOptions {
 	rpName?: string;
 	/**
 	 * The URL at which registrations and authentications should occur.
-	 * 'http://localhost' and 'http://localhost:PORT' are also valid.
+	 * `http://localhost` and `http://localhost:PORT` are also valid.
 	 * Do NOT include any trailing /
 	 *
 	 * if this isn't provided. The client itself will
 	 * pass this value.
 	 */
 	origin?: string | null;
+
+	/**
+	 * Allow customization of the authenticatorSelection options
+	 * during passkey registration.
+	 */
+	authenticatorSelection?: AuthenticatorSelectionCriteria;
+
 	/**
 	 * Advanced options
 	 */
@@ -83,20 +95,9 @@ export type Passkey = {
 };
 
 export const passkey = (options?: PasskeyOptions) => {
-	const baseURL = env.BETTER_AUTH_URL;
-	const rpID =
-		options?.rpID ||
-		baseURL?.replace("http://", "").replace("https://", "").split(":")[0] ||
-		"localhost";
-	if (!rpID) {
-		throw new BetterAuthError(
-			"passkey rpID not found. Please provide a rpID in the options or set the BETTER_AUTH_URL environment variable.",
-		);
-	}
 	const opts = {
 		origin: null,
 		...options,
-		rpID,
 		advanced: {
 			webAuthnChallengeCookie: "better-auth-passkey",
 			...options?.advanced,
@@ -126,6 +127,13 @@ export const passkey = (options?: PasskeyOptions) => {
 				{
 					method: "GET",
 					use: [freshSessionMiddleware],
+					query: z
+						.object({
+							authenticatorAttachment: z
+								.enum(["platform", "cross-platform"])
+								.optional(),
+						})
+						.optional(),
 					metadata: {
 						client: false,
 						openapi: {
@@ -133,6 +141,16 @@ export const passkey = (options?: PasskeyOptions) => {
 							responses: {
 								200: {
 									description: "Success",
+									parameters: {
+										query: {
+											authenticatorAttachment: {
+												description: `Type of authenticator to use for registration. 
+                          "platform" for device-specific authenticators, 
+                          "cross-platform" for authenticators that can be used across devices.`,
+												required: false,
+											},
+										},
+									},
 									content: {
 										"application/json": {
 											schema: {
@@ -234,7 +252,7 @@ export const passkey = (options?: PasskeyOptions) => {
 					},
 				},
 				async (ctx) => {
-					const session = ctx.context.session;
+					const { session } = ctx.context;
 					const userPasskeys = await ctx.context.adapter.findMany<Passkey>({
 						model: "passkey",
 						where: [
@@ -244,13 +262,13 @@ export const passkey = (options?: PasskeyOptions) => {
 							},
 						],
 					});
-					const userID = new Uint8Array(
-						Buffer.from(generateRandomString(32, "a-z", "0-9")),
+					const userID = new TextEncoder().encode(
+						generateRandomString(32, "a-z", "0-9"),
 					);
 					let options: PublicKeyCredentialCreationOptionsJSON;
 					options = await generateRegistrationOptions({
 						rpName: opts.rpName || ctx.context.appName,
-						rpID: opts.rpID,
+						rpID: getRpID(opts, ctx.context.options.baseURL),
 						userID,
 						userName: session.user.email || session.user.id,
 						attestationType: "none",
@@ -263,19 +281,24 @@ export const passkey = (options?: PasskeyOptions) => {
 						authenticatorSelection: {
 							residentKey: "preferred",
 							userVerification: "preferred",
-							authenticatorAttachment: "platform",
+							...(opts.authenticatorSelection || {}),
+							...(ctx.query?.authenticatorAttachment
+								? {
+										authenticatorAttachment: ctx.query.authenticatorAttachment,
+									}
+								: {}),
 						},
 					});
-
 					const id = generateId(32);
-					await ctx.setSignedCookie(
+					const webAuthnCookie = ctx.context.createAuthCookie(
 						opts.advanced.webAuthnChallengeCookie,
+					);
+					await ctx.setSignedCookie(
+						webAuthnCookie.name,
 						id,
 						ctx.context.secret,
 						{
-							secure: true,
-							httpOnly: true,
-							sameSite: "lax",
+							...webAuthnCookie.attributes,
 							maxAge: maxAgeInSeconds,
 						},
 					);
@@ -413,7 +436,7 @@ export const passkey = (options?: PasskeyOptions) => {
 						});
 					}
 					const options = await generateAuthenticationOptions({
-						rpID: opts.rpID,
+						rpID: getRpID(opts, ctx.context.options.baseURL),
 						userVerification: "preferred",
 						...(userPasskeys.length
 							? {
@@ -433,14 +456,15 @@ export const passkey = (options?: PasskeyOptions) => {
 						},
 					};
 					const id = generateId(32);
-					await ctx.setSignedCookie(
+					const webAuthnCookie = ctx.context.createAuthCookie(
 						opts.advanced.webAuthnChallengeCookie,
+					);
+					await ctx.setSignedCookie(
+						webAuthnCookie.name,
 						id,
 						ctx.context.secret,
 						{
-							secure: true,
-							httpOnly: true,
-							sameSite: "lax",
+							...webAuthnCookie.attributes,
 							maxAge: maxAgeInSeconds,
 						},
 					);
@@ -498,8 +522,11 @@ export const passkey = (options?: PasskeyOptions) => {
 						});
 					}
 					const resp = ctx.body.response;
-					const challengeId = await ctx.getSignedCookie(
+					const webAuthnCookie = ctx.context.createAuthCookie(
 						opts.advanced.webAuthnChallengeCookie,
+					);
+					const challengeId = await ctx.getSignedCookie(
+						webAuthnCookie.name,
 						ctx.context.secret,
 					);
 					if (!challengeId) {
@@ -532,7 +559,7 @@ export const passkey = (options?: PasskeyOptions) => {
 							response: resp,
 							expectedChallenge,
 							expectedOrigin: origin,
-							expectedRPID: options?.rpID,
+							expectedRPID: getRpID(opts, ctx.context.options.baseURL),
 							requireUserVerification: false,
 						});
 						const { verified, registrationInfo } = verification;
@@ -550,11 +577,10 @@ export const passkey = (options?: PasskeyOptions) => {
 							credential,
 							credentialType,
 						} = registrationInfo;
-						const pubKey = Buffer.from(credential.publicKey).toString("base64");
-						const newPasskey: Passkey = {
+						const pubKey = base64.encode(credential.publicKey);
+						const newPasskey: Omit<Passkey, "id"> = {
 							name: ctx.body.name,
 							userId: userData.id,
-							id: ctx.context.generateId({ model: "passkey" }),
 							credentialID: credential.id,
 							publicKey: pubKey,
 							counter: credential.counter,
@@ -563,7 +589,10 @@ export const passkey = (options?: PasskeyOptions) => {
 							backedUp: credentialBackedUp,
 							createdAt: new Date(),
 						};
-						const newPasskeyRes = await ctx.context.adapter.create<Passkey>({
+						const newPasskeyRes = await ctx.context.adapter.create<
+							Omit<Passkey, "id">,
+							Passkey
+						>({
 							model: "passkey",
 							data: newPasskey,
 						});
@@ -624,8 +653,11 @@ export const passkey = (options?: PasskeyOptions) => {
 						});
 					}
 					const resp = ctx.body.response;
-					const challengeId = await ctx.getSignedCookie(
+					const webAuthnCookie = ctx.context.createAuthCookie(
 						opts.advanced.webAuthnChallengeCookie,
+					);
+					const challengeId = await ctx.getSignedCookie(
+						webAuthnCookie.name,
 						ctx.context.secret,
 					);
 					if (!challengeId) {
@@ -665,12 +697,10 @@ export const passkey = (options?: PasskeyOptions) => {
 							response: resp as AuthenticationResponseJSON,
 							expectedChallenge,
 							expectedOrigin: origin,
-							expectedRPID: opts.rpID,
+							expectedRPID: getRpID(opts, ctx.context.options.baseURL),
 							credential: {
 								id: passkey.credentialID,
-								publicKey: new Uint8Array(
-									Buffer.from(passkey.publicKey, "base64"),
-								),
+								publicKey: base64.decode(passkey.publicKey),
 								counter: passkey.counter,
 								transports: passkey.transports?.split(
 									",",
@@ -698,7 +728,7 @@ export const passkey = (options?: PasskeyOptions) => {
 						});
 						const s = await ctx.context.internalAdapter.createSession(
 							passkey.userId,
-							ctx.request,
+							ctx.headers,
 						);
 						if (!s) {
 							throw new APIError("INTERNAL_SERVER_ERROR", {
@@ -738,6 +768,35 @@ export const passkey = (options?: PasskeyOptions) => {
 				{
 					method: "GET",
 					use: [sessionMiddleware],
+					metadata: {
+						openapi: {
+							description: "List all passkeys for the authenticated user",
+							responses: {
+								"200": {
+									description: "Passkeys retrieved successfully",
+									content: {
+										"application/json": {
+											schema: {
+												type: "array",
+												items: {
+													$ref: "#/components/schemas/Passkey",
+													required: [
+														"id",
+														"userId",
+														"publicKey",
+														"createdAt",
+														"updatedAt",
+													],
+												},
+												description:
+													"Array of passkey objects associated with the user",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
 				},
 				async (ctx) => {
 					const passkeys = await ctx.context.adapter.findMany<Passkey>({
@@ -757,6 +816,31 @@ export const passkey = (options?: PasskeyOptions) => {
 						id: z.string(),
 					}),
 					use: [sessionMiddleware],
+					metadata: {
+						openapi: {
+							description: "Delete a specific passkey",
+							responses: {
+								"200": {
+									description: "Passkey deleted successfully",
+									content: {
+										"application/json": {
+											schema: {
+												type: "object",
+												properties: {
+													status: {
+														type: "boolean",
+														description:
+															"Indicates whether the deletion was successful",
+													},
+												},
+												required: ["status"],
+											},
+										},
+									},
+								},
+							},
+						},
+					},
 				},
 				async (ctx) => {
 					await ctx.context.adapter.delete<Passkey>({
@@ -782,6 +866,29 @@ export const passkey = (options?: PasskeyOptions) => {
 						name: z.string(),
 					}),
 					use: [sessionMiddleware],
+					metadata: {
+						openapi: {
+							description: "Update a specific passkey's name",
+							responses: {
+								"200": {
+									description: "Passkey updated successfully",
+									content: {
+										"application/json": {
+											schema: {
+												type: "object",
+												properties: {
+													passkey: {
+														$ref: "#/components/schemas/Passkey",
+													},
+												},
+												required: ["passkey"],
+											},
+										},
+									},
+								},
+							},
+						},
+					},
 				},
 				async (ctx) => {
 					const passkey = await ctx.context.adapter.findOne<Passkey>({
@@ -886,5 +993,3 @@ const schema = {
 		},
 	},
 } satisfies AuthPluginSchema;
-
-export * from "./client";

@@ -1,3 +1,5 @@
+import type { User } from "../../types";
+
 export interface OIDCOptions {
 	/**
 	 * The amount of time in seconds that the access token is valid for.
@@ -106,6 +108,19 @@ export interface OIDCOptions {
 	 * Custom function to generate a client secret.
 	 */
 	generateClientSecret?: () => string;
+	/**
+	 * Get the additional user info claims
+	 *
+	 * This applies to the `userinfo` endpoint and the `id_token`.
+	 *
+	 * @param user - The user object.
+	 * @param scopes - The scopes that the client requested.
+	 * @returns The user info claim.
+	 */
+	getAdditionalUserInfoClaim?: (
+		user: User & Record<string, any>,
+		scopes: string[],
+	) => Record<string, any> | Promise<Record<string, any>>;
 }
 
 export interface AuthorizationQuery {
@@ -206,6 +221,15 @@ export interface AuthorizationQuery {
 	 * Code challenge method used
 	 */
 	code_challenge_method?: "plain" | "s256";
+	/**
+	 * String value used to associate a Client session with an ID Token, and to mitigate replay
+	 * attacks. The value is passed through unmodified from the Authentication Request to the ID Token.
+	 * If present in the ID Token, Clients MUST verify that the nonce Claim Value is equal to the
+	 * value of the nonce parameter sent in the Authentication Request. If present in the
+	 * Authentication Request, Authorization Servers MUST include a nonce Claim in the ID Token
+	 * with the Claim Value being the nonce value sent in the Authentication Request.
+	 */
+	nonce?: string;
 }
 
 export interface Client {
@@ -335,6 +359,10 @@ export interface CodeVerificationValue {
 	 * Code Challenge Method
 	 */
 	codeChallengeMethod?: "sha256" | "plain";
+	/**
+	 * Nonce
+	 */
+	nonce?: string;
 }
 
 export interface OAuthAccessToken {
@@ -393,7 +421,7 @@ export interface OIDCMetadata {
 	 *
 	 * @default `/oauth2/userinfo`
 	 */
-	userInfo_endpoint: string;
+	userinfo_endpoint: string;
 	/**
 	 * The URL of the jwks_uri endpoint.
 	 *

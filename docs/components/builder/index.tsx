@@ -1,4 +1,4 @@
-import { ChevronLeft, Copy, Mail, Moon, PlusIcon, Sun } from "lucide-react";
+import { Moon, PlusIcon, Sun } from "lucide-react";
 import {
 	Dialog,
 	DialogContent,
@@ -28,8 +28,6 @@ import { useAtom } from "jotai";
 import { optionsAtom } from "./store";
 import { useTheme } from "next-themes";
 import { ScrollArea } from "../ui/scroll-area";
-import { Button } from "../ui/button";
-import Link from "next/link";
 const frameworks = [
 	{
 		title: "Next.js",
@@ -71,7 +69,7 @@ const frameworks = [
 		),
 	},
 	{
-		title: "Svelte Kit",
+		title: "SvelteKit",
 		description: "Web development for the rest of us",
 		Icon: () => (
 			<svg
@@ -102,7 +100,7 @@ const frameworks = [
 		),
 	},
 	{
-		title: "Solid Start",
+		title: "SolidStart",
 		description: "Fine-grained reactivity goes fullstack",
 		Icon: () => (
 			<svg
@@ -265,21 +263,13 @@ export function Builder() {
 					<DialogTitle>Create Sign in Box</DialogTitle>
 					<DialogDescription>
 						Configure the sign in box to your liking and copy the code to your
-						application. For more advanced and iterative features you can use on{" "}
-						<Link
-							target="_blank"
-							className="underline underline-offset-4"
-							href="https://better-auth.farmui.com"
-						>
-							farmui
-						</Link>{" "}
-						.
+						application.
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="flex gap-4 md:gap-12 flex-col md:flex-row items-center md:items-start">
 					<ScrollArea className="w-4/12">
-						<div className="overflow-scroll h-[580px] relate">
+						<div className="overflow-scroll h-[580px] relative">
 							{options.signUp ? (
 								<AuthTabs
 									tabs={[

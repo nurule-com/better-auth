@@ -61,33 +61,8 @@ Some of the actions are reactive. The client use [nano-store](https://github.com
             });
           }}
         >
-          Continue with github
+          Continue with GitHub
         </button>
       {/if}
     </div>
-```
-
-### Example: Getting Session on a loader
-
-```ts title="+page.server.ts"
-import { auth } from "$lib/auth";
-import type { PageServerLoad } from "./$types";
-
-export const load: PageServerLoad = async ({ request }) => {
-	const session = await auth.api.getSession({
-		headers: request.headers,
-	});
-	if (!session) {
-		return {
-			status: 401,
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				error: "Unauthorized",
-			}),
-		};
-	}
-	return session;
-}
 ```

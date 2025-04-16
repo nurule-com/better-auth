@@ -35,7 +35,7 @@ function getRetryAfter(lastRequest: number, window: number) {
 }
 
 function createDBStorage(ctx: AuthContext, modelName?: string) {
-	const model = "rateLimit";
+	const model = ctx.options.rateLimit?.modelName || "rateLimit";
 	const db = ctx.adapter;
 	return {
 		get: async (key: string) => {
@@ -44,13 +44,18 @@ function createDBStorage(ctx: AuthContext, modelName?: string) {
 				where: [{ field: "key", value: key }],
 			});
 			const data = res[0];
+
+			if (typeof data?.lastRequest === "bigint") {
+				data.lastRequest = Number(data.lastRequest);
+			}
+
 			return data;
 		},
 		set: async (key: string, value: RateLimit, _update?: boolean) => {
 			try {
 				if (_update) {
 					await db.updateMany({
-						model: modelName ?? "rateLimit",
+						model: "rateLimit",
 						where: [{ field: "key", value: key }],
 						update: {
 							count: value.count,
@@ -59,7 +64,7 @@ function createDBStorage(ctx: AuthContext, modelName?: string) {
 					});
 				} else {
 					await db.create({
-						model: modelName ?? "rateLimit",
+						model: "rateLimit",
 						data: {
 							key,
 							count: value.count,
@@ -108,12 +113,17 @@ export async function onRequestRateLimit(req: Request, ctx: AuthContext) {
 	if (!ctx.rateLimit.enabled) {
 		return;
 	}
-
-	const baseURL = ctx.baseURL;
-	const path = req.url.replace(baseURL, "").split("?")[0];
+	const path = new URL(req.url).pathname.replace(
+		ctx.options.basePath || "/api/auth",
+		"",
+	);
 	let window = ctx.rateLimit.window;
 	let max = ctx.rateLimit.max;
-	const key = getIp(req, ctx.options) + path;
+	const ip = getIp(req, ctx.options);
+	if (!ip) {
+		return;
+	}
+	const key = ip + path;
 	const specialRules = getDefaultSpecialRules();
 	const specialRule = specialRules.find((rule) => rule.pathMatcher(path));
 

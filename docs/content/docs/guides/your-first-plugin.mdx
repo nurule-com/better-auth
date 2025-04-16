@@ -56,7 +56,7 @@ Although this does nothing, you have technically just made yourself your first p
 ### Defining a schema
 In order to save each user’s birthday data, we must create a schema on top of the `user` model.
 
-By creating a schema here, this also allows <Link href="/docs/concepts/cli">Better-Auth’s CLI</Link> to generate the schemas required to update your database.
+By creating a schema here, this also allows <Link href="/docs/concepts/cli">Better Auth’s CLI</Link> to generate the schemas required to update your database.
 
 <Callout type="info">
 You can learn more about <Link href="/docs/concepts/plugins#schema">plugin schemas here</Link>.
@@ -86,7 +86,7 @@ export const birthdayPlugin = () =>
 
 <Step>
 ### Authorization logic
-For this example guide, we’ll setup authentication logic to check and ensure that the user who signs-up is older than 5.
+For this example guide, we’ll set up authentication logic to check and ensure that the user who signs-up is older than 5.
 But the same concept could be applied for something like verifying users agreeing to the TOS or anything alike.
 
 To do this, we’ll utilize <Link href="/docs/concepts/plugins#hooks">Hooks</Link>, which allows us to run code `before` or `after` an action is performed.

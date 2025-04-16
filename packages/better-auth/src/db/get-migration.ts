@@ -46,9 +46,9 @@ const sqliteMap = {
 };
 
 const mssqlMap = {
-	string: ["nvarchar", "varchar"],
+	string: ["text", "varchar"],
 	number: ["int", "bigint", "smallint", "decimal", "float", "double"],
-	boolean: ["bit", "boolean"],
+	boolean: ["bit", "smallint"],
 	date: ["datetime", "date"],
 };
 
@@ -164,7 +164,7 @@ export async function getMigrations(config: BetterAuthOptions) {
 		| CreateTableBuilder<string, string>
 	)[] = [];
 
-	function getType(field: FieldAttribute) {
+	function getType(field: FieldAttribute, fieldName: string) {
 		const type = field.type;
 		const typeMap = {
 			string: {
@@ -175,19 +175,24 @@ export async function getMigrations(config: BetterAuthOptions) {
 					: field.references
 						? "varchar(36)"
 						: "text",
-				mssql: "text",
+				mssql:
+					field.unique || field.sortable
+						? "varchar(255)"
+						: field.references
+							? "varchar(36)"
+							: "text",
 			},
 			boolean: {
 				sqlite: "integer",
 				postgres: "boolean",
 				mysql: "boolean",
-				mssql: "boolean",
+				mssql: "smallint",
 			},
 			number: {
-				sqlite: "integer",
-				postgres: "integer",
-				mysql: "integer",
-				mssql: "integer",
+				sqlite: field.bigint ? "bigint" : "integer",
+				postgres: field.bigint ? "bigint" : "integer",
+				mysql: field.bigint ? "bigint" : "integer",
+				mssql: field.bigint ? "bigint" : "integer",
 			},
 			date: {
 				sqlite: "date",
@@ -195,7 +200,20 @@ export async function getMigrations(config: BetterAuthOptions) {
 				mysql: "datetime",
 				mssql: "datetime",
 			},
+			id: {
+				postgres: config.advanced?.database?.useNumberId ? "serial" : "text",
+				mysql: config.advanced?.database?.useNumberId
+					? "integer"
+					: "varchar(36)",
+				mssql: config.advanced?.database?.useNumberId
+					? "integer"
+					: "varchar(36)",
+				sqlite: config.advanced?.database?.useNumberId ? "integer" : "text",
+			},
 		} as const;
+		if (fieldName === "id" || field.references?.field === "id") {
+			return typeMap.id[dbType!];
+		}
 		if (dbType === "sqlite" && (type === "string[]" || type === "number[]")) {
 			return "text";
 		}
@@ -210,7 +228,7 @@ export async function getMigrations(config: BetterAuthOptions) {
 	if (toBeAdded.length) {
 		for (const table of toBeAdded) {
 			for (const [fieldName, field] of Object.entries(table.fields)) {
-				const type = getType(field);
+				const type = getType(field, fieldName);
 				const exec = db.schema
 					.alterTable(table.table)
 					.addColumn(fieldName, type, (col) => {
@@ -233,12 +251,28 @@ export async function getMigrations(config: BetterAuthOptions) {
 		for (const table of toBeCreated) {
 			let dbT = db.schema
 				.createTable(table.table)
-				.addColumn("id", dbType === "mysql" ? "varchar(36)" : "text", (col) =>
-					col.primaryKey().notNull(),
+				.addColumn(
+					"id",
+					config.advanced?.database?.useNumberId
+						? dbType === "postgres"
+							? "serial"
+							: "integer"
+						: dbType === "mysql" || dbType === "mssql"
+							? "varchar(36)"
+							: "text",
+					(col) => {
+						if (config.advanced?.database?.useNumberId) {
+							if (dbType === "postgres") {
+								return col.primaryKey().notNull();
+							}
+							return col.autoIncrement().primaryKey().notNull();
+						}
+						return col.primaryKey().notNull();
+					},
 				);
 
 			for (const [fieldName, field] of Object.entries(table.fields)) {
-				const type = getType(field);
+				const type = getType(field, fieldName);
 				dbT = dbT.addColumn(fieldName, type, (col) => {
 					col = field.required !== false ? col.notNull() : col;
 					if (field.references) {
@@ -262,7 +296,7 @@ export async function getMigrations(config: BetterAuthOptions) {
 	}
 	async function compileMigrations() {
 		const compiled = migrations.map((m) => m.compile().sql);
-		return compiled.join(";\n\n");
+		return compiled.join(";\n\n") + ";";
 	}
 	return { toBeCreated, toBeAdded, runMigrations, compileMigrations };
 }

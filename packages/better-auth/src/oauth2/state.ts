@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { GenericEndpointContext } from "../types";
 import { APIError } from "better-call";
-import { getOrigin } from "../utils/url";
 import { generateRandomString } from "../crypto";
 
 export async function generateState(
@@ -11,10 +10,7 @@ export async function generateState(
 		userId: string;
 	},
 ) {
-	const callbackURL =
-		c.body?.callbackURL ||
-		(c.query?.currentURL ? getOrigin(c.query?.currentURL) : "") ||
-		c.context.options.baseURL;
+	const callbackURL = c.body?.callbackURL || c.context.options.baseURL;
 	if (!callbackURL) {
 		throw new APIError("BAD_REQUEST", {
 			message: "callbackURL is required",
@@ -25,13 +21,15 @@ export async function generateState(
 	const data = JSON.stringify({
 		callbackURL,
 		codeVerifier,
-		errorURL: c.body?.errorCallbackURL || c.query?.currentURL,
+		errorURL: c.body?.errorCallbackURL,
 		newUserURL: c.body?.newUserCallbackURL,
 		link,
+
 		/**
 		 * This is the actual expiry time of the state
 		 */
 		expiresAt: Date.now() + 10 * 60 * 1000,
+		requestSignUp: c.body?.requestSignUp,
 	});
 	const expiresAt = new Date();
 	expiresAt.setMinutes(expiresAt.getMinutes() + 10);
@@ -75,9 +73,10 @@ export async function parseState(c: GenericEndpointContext) {
 			link: z
 				.object({
 					email: z.string(),
-					userId: z.string(),
+					userId: z.coerce.string(),
 				})
 				.optional(),
+			requestSignUp: z.boolean().optional(),
 		})
 		.parse(JSON.parse(data.value));
 
@@ -86,9 +85,6 @@ export async function parseState(c: GenericEndpointContext) {
 	}
 	if (parsedData.expiresAt < Date.now()) {
 		await c.context.internalAdapter.deleteVerificationValue(data.id);
-		c.context.logger.error("State expired.", {
-			state,
-		});
 		throw c.redirect(
 			`${c.context.baseURL}/error?error=please_restart_the_process`,
 		);

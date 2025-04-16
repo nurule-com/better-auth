@@ -12,15 +12,6 @@ export const signInSocial = createAuthEndpoint(
 	"/sign-in/social",
 	{
 		method: "POST",
-		query: z
-			.object({
-				/**
-				 * Redirect to the current URL after the
-				 * user has signed in.
-				 */
-				currentURL: z.string().optional(),
-			})
-			.optional(),
 		body: z.object({
 			/**
 			 * Callback URL to redirect to after the user
@@ -122,32 +113,97 @@ export const signInSocial = createAuthEndpoint(
 						"ID token from the provider to sign in the user with id token",
 				},
 			),
+			scopes: z
+				.array(z.string(), {
+					description:
+						"Array of scopes to request from the provider. This will override the default scopes passed.",
+				})
+				.optional(),
+			/**
+			 * Explicitly request sign-up
+			 *
+			 * Should be used to allow sign up when
+			 * disableImplicitSignUp for this provider is
+			 * true
+			 */
+			requestSignUp: z
+				.boolean({
+					description:
+						"Explicitly request sign-up. Useful when disableImplicitSignUp is true for this provider",
+				})
+				.optional(),
+			/**
+			 * The login hint to use for the authorization code request
+			 */
+			loginHint: z
+				.string({
+					description:
+						"The login hint to use for the authorization code request",
+				})
+				.optional(),
 		}),
 		metadata: {
 			openapi: {
 				description: "Sign in with a social provider",
+				operationId: "socialSignIn",
 				responses: {
 					"200": {
-						description: "Success",
+						description:
+							"Success - Returns either session details or redirect URL",
 						content: {
 							"application/json": {
 								schema: {
+									// todo: we need support for multiple schema
 									type: "object",
+									description: "Session response when idToken is provided",
 									properties: {
-										session: {
-											type: "string",
-										},
-										user: {
-											type: "object",
-										},
-										url: {
-											type: "string",
-										},
 										redirect: {
 											type: "boolean",
+											enum: [false],
 										},
+										token: {
+											type: "string",
+											description: "Session token",
+											url: {
+												type: "null",
+												nullable: true,
+											},
+											user: {
+												type: "object",
+												properties: {
+													id: { type: "string" },
+													email: { type: "string" },
+													name: {
+														type: "string",
+														nullable: true,
+													},
+													image: {
+														type: "string",
+														nullable: true,
+													},
+													emailVerified: {
+														type: "boolean",
+													},
+													createdAt: {
+														type: "string",
+														format: "date-time",
+													},
+													updatedAt: {
+														type: "string",
+														format: "date-time",
+													},
+												},
+												required: [
+													"id",
+													"email",
+													"emailVerified",
+													"createdAt",
+													"updatedAt",
+												],
+											},
+										},
+										required: ["redirect", "token", "user"],
 									},
-									required: ["session", "user", "url", "redirect"],
 								},
 							},
 						},
@@ -217,6 +273,7 @@ export const signInSocial = createAuthEndpoint(
 			}
 			const data = await handleOAuthUserInfo(c, {
 				userInfo: {
+					...userInfo.user,
 					email: userInfo.user.email,
 					id: userInfo.user.id,
 					name: userInfo.user.name || "",
@@ -228,6 +285,9 @@ export const signInSocial = createAuthEndpoint(
 					accountId: userInfo.user.id,
 					accessToken: c.body.idToken.accessToken,
 				},
+				disableSignUp:
+					(provider.disableImplicitSignUp && !c.body.requestSignUp) ||
+					provider.disableSignUp,
 			});
 			if (data.error) {
 				throw new APIError("UNAUTHORIZED", {
@@ -236,9 +296,18 @@ export const signInSocial = createAuthEndpoint(
 			}
 			await setSessionCookie(c, data.data!);
 			return c.json({
+				redirect: false,
 				token: data.data!.session.token,
 				url: undefined,
-				redirect: false,
+				user: {
+					id: data.data!.user.id,
+					email: data.data!.user.email,
+					name: data.data!.user.name,
+					image: data.data!.user.image,
+					emailVerified: data.data!.user.emailVerified,
+					createdAt: data.data!.user.createdAt,
+					updatedAt: data.data!.user.updatedAt,
+				},
 			});
 		}
 
@@ -247,6 +316,8 @@ export const signInSocial = createAuthEndpoint(
 			state,
 			codeVerifier,
 			redirectURI: `${c.context.baseURL}/callback/${provider.id}`,
+			scopes: c.body.scopes,
+			loginHint: c.body.loginHint,
 		});
 
 		return c.json({
@@ -300,23 +371,62 @@ export const signInEmail = createAuthEndpoint(
 				description: "Sign in with email and password",
 				responses: {
 					"200": {
-						description: "Success",
+						description:
+							"Success - Returns either session details or redirect URL",
 						content: {
 							"application/json": {
 								schema: {
+									// todo: we need support for multiple schema
 									type: "object",
+									description: "Session response when idToken is provided",
 									properties: {
-										user: {
-											type: "object",
-										},
-										url: {
-											type: "string",
-										},
 										redirect: {
 											type: "boolean",
+											enum: [false],
+										},
+										token: {
+											type: "string",
+											description: "Session token",
+										},
+										url: {
+											type: "null",
+											nullable: true,
+										},
+										user: {
+											type: "object",
+											properties: {
+												id: { type: "string" },
+												email: { type: "string" },
+												name: {
+													type: "string",
+													nullable: true,
+												},
+												image: {
+													type: "string",
+													nullable: true,
+												},
+												emailVerified: {
+													type: "boolean",
+												},
+												createdAt: {
+													type: "string",
+													format: "date-time",
+												},
+												updatedAt: {
+													type: "string",
+													format: "date-time",
+												},
+											},
+											required: [
+												"id",
+												"email",
+												"emailVerified",
+												"createdAt",
+												"updatedAt",
+											],
 										},
 									},
-									required: ["session", "user", "url", "redirect"],
+									required: ["redirect", "token", "user"],
 								},
 							},
 						},
@@ -385,13 +495,15 @@ export const signInEmail = createAuthEndpoint(
 			!user.user.emailVerified
 		) {
 			if (!ctx.context.options?.emailVerification?.sendVerificationEmail) {
-				throw new APIError("UNAUTHORIZED", {
+				throw new APIError("FORBIDDEN", {
 					message: BASE_ERROR_CODES.EMAIL_NOT_VERIFIED,
 				});
 			}
 			const token = await createEmailVerificationToken(
 				ctx.context.secret,
 				user.user.email,
+				undefined,
+				ctx.context.options.emailVerification?.expiresIn,
 			);
 			const url = `${
 				ctx.context.baseURL
@@ -431,6 +543,9 @@ export const signInEmail = createAuthEndpoint(
 			ctx.body.rememberMe === false,
 		);
 		return ctx.json({
+			redirect: !!ctx.body.callbackURL,
+			token: session.token,
+			url: ctx.body.callbackURL,
 			user: {
 				id: user.user.id,
 				email: user.user.email,
@@ -440,9 +555,6 @@ export const signInEmail = createAuthEndpoint(
 				createdAt: user.user.createdAt,
 				updatedAt: user.user.updatedAt,
 			},
-			token: session.token,
-			redirect: !!ctx.body.callbackURL,
-			url: ctx.body.callbackURL,
 		});
 	},
 );

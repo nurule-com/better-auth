@@ -5,6 +5,7 @@ import type { AuthContext } from "../../init";
 import { getDate } from "../../utils/date";
 import { generateId } from "../../utils";
 import { BASE_ERROR_CODES } from "../../error/codes";
+import { originCheck } from "../middlewares";
 
 function redirectError(
 	ctx: AuthContext,
@@ -83,7 +84,7 @@ export const forgetPassword = createAuthEndpoint(
 	async (ctx) => {
 		if (!ctx.context.options.emailAndPassword?.sendResetPassword) {
 			ctx.context.logger.error(
-				"Reset password isn't enabled.Please pass an emailAndPassword.sendResetPasswordToken function in your auth config!",
+				"Reset password isn't enabled.Please pass an emailAndPassword.sendResetPassword function in your auth config!",
 			);
 			throw new APIError("BAD_REQUEST", {
 				message: "Reset password isn't enabled",
@@ -96,18 +97,9 @@ export const forgetPassword = createAuthEndpoint(
 		});
 		if (!user) {
 			ctx.context.logger.error("Reset Password: User not found", { email });
-			//only on the server status is false for the client it's always true
-			//to avoid leaking information
-			return ctx.json(
-				{
-					status: false,
-				},
-				{
-					body: {
-						status: true,
-					},
-				},
-			);
+			return ctx.json({
+				status: true,
+			});
 		}
 		const defaultExpiresIn = 60 * 60 * 1;
 		const expiresAt = getDate(
@@ -117,7 +109,7 @@ export const forgetPassword = createAuthEndpoint(
 		);
 		const verificationToken = generateId(24);
 		await ctx.context.internalAdapter.createVerificationValue({
-			value: user.user.id.toString(),
+			value: user.user.id,
 			identifier: `reset-password:${verificationToken}`,
 			expiresAt,
 		});
@@ -145,6 +137,7 @@ export const forgetPasswordCallback = createAuthEndpoint(
 				description: "The URL to redirect the user to reset their password",
 			}),
 		}),
+		use: [originCheck((ctx) => ctx.query.callbackURL)],
 		metadata: {
 			openapi: {
 				description: "Redirects the user to the callback URL with the token",
@@ -193,13 +186,12 @@ export const forgetPasswordCallback = createAuthEndpoint(
 export const resetPassword = createAuthEndpoint(
 	"/reset-password",
 	{
-		query: z.optional(
-			z.object({
-				token: z.string().optional(),
-				currentURL: z.string().optional(),
-			}),
-		),
 		method: "POST",
+		query: z
+			.object({
+				token: z.string().optional(),
+			})
+			.optional(),
 		body: z.object({
 			newPassword: z.string({
 				description: "The new password to set",
@@ -234,12 +226,7 @@ export const resetPassword = createAuthEndpoint(
 		},
 	},
 	async (ctx) => {
-		const token =
-			ctx.body.token ||
-			ctx.query?.token ||
-			(ctx.query?.currentURL
-				? new URL(ctx.query.currentURL).searchParams.get("token")
-				: "");
+		const token = ctx.body.token || ctx.query?.token;
 		if (!token) {
 			throw new APIError("BAD_REQUEST", {
 				message: BASE_ERROR_CODES.INVALID_TOKEN,
@@ -270,23 +257,35 @@ export const resetPassword = createAuthEndpoint(
 				message: BASE_ERROR_CODES.INVALID_TOKEN,
 			});
 		}
-		await ctx.context.internalAdapter.deleteVerificationValue(verification.id);
 		const userId = verification.value;
 		const hashedPassword = await ctx.context.password.hash(newPassword);
 		const accounts = await ctx.context.internalAdapter.findAccounts(userId);
 		const account = accounts.find((ac) => ac.providerId === "credential");
 		if (!account) {
-			await ctx.context.internalAdapter.createAccount({
-				userId,
-				providerId: "credential",
-				password: hashedPassword,
-				accountId: userId,
-			});
+			await ctx.context.internalAdapter.createAccount(
+				{
+					userId,
+					providerId: "credential",
+					password: hashedPassword,
+					accountId: userId,
+				},
+				ctx,
+			);
+			await ctx.context.internalAdapter.deleteVerificationValue(
+				verification.id,
+			);
+
 			return ctx.json({
 				status: true,
 			});
 		}
-		await ctx.context.internalAdapter.updatePassword(userId, hashedPassword);
+		await ctx.context.internalAdapter.updatePassword(
+			userId,
+			hashedPassword,
+			ctx,
+		);
+		await ctx.context.internalAdapter.deleteVerificationValue(verification.id);
+
 		return ctx.json({
 			status: true,
 		});

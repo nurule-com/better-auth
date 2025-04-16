@@ -1,5 +1,6 @@
 import type { ZodSchema } from "zod";
-import type { BetterAuthOptions, LiteralNumber, LiteralString } from "../types";
+import type { BetterAuthOptions } from "../types";
+import type { LiteralString } from "../types/helper";
 
 export type FieldType =
 	| "string"
@@ -22,7 +23,7 @@ type Primitive =
 export type FieldAttributeConfig<T extends FieldType = FieldType> = {
 	/**
 	 * If the field should be required on a new record.
-	 * @default false
+	 * @default true
 	 */
 	required?: boolean;
 	/**
@@ -74,6 +75,10 @@ export type FieldAttributeConfig<T extends FieldType = FieldType> = {
 	};
 	unique?: boolean;
 	/**
+	 * If the field should be a bigint on the database instead of integer.
+	 */
+	bigint?: boolean;
+	/**
 	 * A zod schema to validate the value.
 	 */
 	validator?: {
@@ -84,6 +89,13 @@ export type FieldAttributeConfig<T extends FieldType = FieldType> = {
 	 * The name of the field on the database.
 	 */
 	fieldName?: string;
+	/**
+	 * If the field should be sortable.
+	 *
+	 * applicable only for `text` type.
+	 * It's useful to mark fields varchar instead of text.
+	 */
+	sortable?: boolean;
 };
 
 export type FieldAttribute<T extends FieldType = FieldType> = {
@@ -149,7 +161,7 @@ export type InferFieldsInput<Field> = Field extends Record<
 						? never
 						: key]: InferFieldInput<Field[key]>;
 		} & {
-			[key in Key as Field[key]["input"] extends false ? never : key]:
+			[key in Key as Field[key]["input"] extends false ? never : key]?:
 				| InferFieldInput<Field[key]>
 				| undefined
 				| null;
@@ -176,7 +188,9 @@ export type InferFieldsInputClient<Field> = Field extends Record<
 				? never
 				: Field[key]["required"] extends false
 					? key
-					: never]?: InferFieldInput<Field[key]> | undefined | null;
+					: Field[key]["defaultValue"] extends string | number | boolean | Date
+						? key
+						: never]?: InferFieldInput<Field[key]> | undefined | null;
 		}
 	: {};
 

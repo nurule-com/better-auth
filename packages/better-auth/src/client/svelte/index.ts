@@ -6,8 +6,6 @@ import type {
 	InferActions,
 	InferClientAPI,
 	InferErrorCodes,
-	InferSessionFromClient,
-	InferUserFromClient,
 	IsSignal,
 } from "../types";
 import { createDynamicPathProxy } from "../proxy";
@@ -94,3 +92,6 @@ export function createAuthClient<Option extends ClientOptions>(
 			>;
 		};
 }
+
+export type * from "@better-fetch/fetch";
+export type * from "nanostores";

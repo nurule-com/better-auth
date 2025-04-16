@@ -3,13 +3,25 @@
 exports[`init > should match config 1`] = `
 {
   "adapter": {
+    "count": [Function],
     "create": [Function],
+    "createSchema": undefined,
     "delete": [Function],
     "deleteMany": [Function],
     "findMany": [Function],
     "findOne": [Function],
     "id": "kysely",
     "options": {
+      "adapterConfig": {
+        "adapterId": "kysely",
+        "adapterName": "Kysely Adapter",
+        "debugLogs": undefined,
+        "supportsBooleans": false,
+        "supportsDates": false,
+        "supportsJSON": false,
+        "supportsNumericIds": true,
+        "usePlural": undefined,
+      },
       "type": "sqlite",
     },
     "update": [Function],
@@ -51,11 +63,13 @@ exports[`init > should match config 1`] = `
   "createAuthCookie": [Function],
   "generateId": [Function],
   "internalAdapter": {
+    "countTotalUsers": [Function],
     "createAccount": [Function],
     "createOAuthUser": [Function],
     "createSession": [Function],
     "createUser": [Function],
     "createVerificationValue": [Function],
+    "deleteAccount": [Function],
     "deleteAccounts": [Function],
     "deleteSession": [Function],
     "deleteSessions": [Function],
@@ -99,10 +113,6 @@ exports[`init > should match config 1`] = `
       "open": true,
       "readonly": false,
     },
-    "emailAndPassword": {
-      "autoSignIn": true,
-      "enabled": false,
-    },
     "plugins": [],
     "secret": "better-auth-secret-123456789",
   },
@@ -121,6 +131,7 @@ exports[`init > should match config 1`] = `
     "storage": "memory",
     "window": 10,
   },
+  "runMigrations": [Function],
   "secondaryStorage": undefined,
   "secret": "better-auth-secret-123456789",
   "session": null,
@@ -261,6 +272,7 @@ exports[`init > should match config 1`] = `
         "email": {
           "fieldName": "email",
           "required": true,
+          "sortable": true,
           "type": "string",
           "unique": true,
         },
@@ -278,6 +290,7 @@ exports[`init > should match config 1`] = `
         "name": {
           "fieldName": "name",
           "required": true,
+          "sortable": true,
           "type": "string",
         },
         "updatedAt": {

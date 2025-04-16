@@ -1,4 +1,3 @@
-import type { GenericEndpointContext } from "./context";
 import type { BetterAuthOptions } from "./options";
 
 /**
@@ -16,7 +15,7 @@ export type Where = {
 		| "contains"
 		| "starts_with"
 		| "ends_with"; //eq by default
-	value: string | number | boolean | string[] | number[];
+	value: string | number | boolean | string[] | number[] | Date | null;
 	field: string;
 	connector?: "AND" | "OR"; //AND by default
 };
@@ -28,7 +27,7 @@ export type Adapter = {
 	id: string;
 	create: <T extends Record<string, any>, R = T>(data: {
 		model: string;
-		data: T;
+		data: Omit<T, "id">;
 		select?: string[];
 	}) => Promise<R>;
 	findOne: <T>(data: {
@@ -46,6 +45,10 @@ export type Adapter = {
 		};
 		offset?: number;
 	}) => Promise<T[]>;
+	count: (data: {
+		model: string;
+		where?: Where[];
+	}) => Promise<number>;
 	/**
 	 * ⚠︎ Update may not return the updated data
 	 * if multiple where clauses are provided
@@ -66,18 +69,33 @@ export type Adapter = {
 	 *
 	 * @param options
 	 * @param file - file path if provided by the user
-	 * @returns
 	 */
 	createSchema?: (
 		options: BetterAuthOptions,
 		file?: string,
-	) => Promise<{
-		code: string;
-		fileName: string;
-		append?: boolean;
-		overwrite?: boolean;
-	}>;
+	) => Promise<AdapterSchemaCreation>;
 	options?: Record<string, any>;
+};
+
+export type AdapterSchemaCreation = {
+	/**
+	 * Code to be inserted into the file
+	 */
+	code: string;
+	/**
+	 * Path to the file, including the file name and extension.
+	 * Relative paths are supported, with the current working directory of the developer's project as the base.
+	 */
+	path: string;
+	/**
+	 * Append the file if it already exists.
+	 * Note: This will not apply if `overwrite` is set to true.
+	 */
+	append?: boolean;
+	/**
+	 * Overwrite the file if it already exists
+	 */
+	overwrite?: boolean;
 };
 
 export interface AdapterInstance {

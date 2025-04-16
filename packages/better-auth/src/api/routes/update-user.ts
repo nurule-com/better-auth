@@ -1,34 +1,30 @@
-import { z, ZodNull, ZodObject, ZodOptional, ZodString } from "zod";
+import { z } from "zod";
 import { createAuthEndpoint } from "../call";
 
 import { deleteSessionCookie, setSessionCookie } from "../../cookies";
 import { getSessionFromCtx, sessionMiddleware } from "./session";
 import { APIError } from "better-call";
 import { createEmailVerificationToken } from "./email-verification";
-import type { toZod } from "../../types/to-zod";
-import type {
-	AdditionalUserFieldsInput,
-	BetterAuthOptions,
-	User,
-} from "../../types";
+import type { AdditionalUserFieldsInput, BetterAuthOptions } from "../../types";
 import { parseUserInput } from "../../db/schema";
 import { generateRandomString } from "../../crypto";
 import { BASE_ERROR_CODES } from "../../error/codes";
+import { originCheck } from "../middlewares";
 
 export const updateUser = <O extends BetterAuthOptions>() =>
 	createAuthEndpoint(
 		"/update-user",
 		{
 			method: "POST",
-			body: z.record(z.string(), z.any()) as unknown as toZod<
-				AdditionalUserFieldsInput<O>
-			> &
-				ZodObject<{
-					name: ZodOptional<ZodString>;
-					image: ZodOptional<ZodString | ZodNull>;
-				}>,
+			body: z.record(z.string(), z.any()),
 			use: [sessionMiddleware],
 			metadata: {
+				$Infer: {
+					body: {} as Partial<AdditionalUserFieldsInput<O>> & {
+						name?: string;
+						image?: string;
+					},
+				},
 				openapi: {
 					description: "Update the current user",
 					requestBody: {
@@ -58,8 +54,9 @@ export const updateUser = <O extends BetterAuthOptions>() =>
 									schema: {
 										type: "object",
 										properties: {
-											user: {
-												type: "object",
+											status: {
+												type: "boolean",
+												description: "Indicates if the update was successful",
 											},
 										},
 									},
@@ -98,13 +95,14 @@ export const updateUser = <O extends BetterAuthOptions>() =>
 				rest,
 				"update",
 			);
-			const user = await ctx.context.internalAdapter.updateUserByEmail(
-				session.user.email,
+			const user = await ctx.context.internalAdapter.updateUser(
+				session.user.id,
 				{
 					name,
 					image,
 					...additionalFields,
 				},
+				ctx,
 			);
 			/**
 			 * Update the session cookie with the new user data
@@ -152,17 +150,66 @@ export const changePassword = createAuthEndpoint(
 				description: "Change the password of the user",
 				responses: {
 					"200": {
-						description: "Success",
+						description: "Password successfully changed",
 						content: {
 							"application/json": {
 								schema: {
 									type: "object",
 									properties: {
+										token: {
+											type: "string",
+											nullable: true, // Only present if revokeOtherSessions is true
+											description:
+												"New session token if other sessions were revoked",
+										},
 										user: {
-											description: "The user object",
-											$ref: "#/components/schemas/User",
+											type: "object",
+											properties: {
+												id: {
+													type: "string",
+													description: "The unique identifier of the user",
+												},
+												email: {
+													type: "string",
+													format: "email",
+													description: "The email address of the user",
+												},
+												name: {
+													type: "string",
+													description: "The name of the user",
+												},
+												image: {
+													type: "string",
+													format: "uri",
+													nullable: true,
+													description: "The profile image URL of the user",
+												},
+												emailVerified: {
+													type: "boolean",
+													description: "Whether the email has been verified",
+												},
+												createdAt: {
+													type: "string",
+													format: "date-time",
+													description: "When the user was created",
+												},
+												updatedAt: {
+													type: "string",
+													format: "date-time",
+													description: "When the user was last updated",
+												},
+											},
+											required: [
+												"id",
+												"email",
+												"name",
+												"emailVerified",
+												"createdAt",
+												"updatedAt",
+											],
 										},
 									},
+									required: ["user"],
 								},
 							},
 						},
@@ -237,6 +284,15 @@ export const changePassword = createAuthEndpoint(
 
 		return ctx.json({
 			token,
+			user: {
+				id: session.user.id,
+				email: session.user.email,
+				name: session.user.name,
+				image: session.user.image,
+				emailVerified: session.user.emailVerified,
+				createdAt: session.user.createdAt,
+				updatedAt: session.user.updatedAt,
+			},
 		});
 	},
 );
@@ -284,12 +340,15 @@ export const setPassword = createAuthEndpoint(
 		);
 		const passwordHash = await ctx.context.password.hash(newPassword);
 		if (!account) {
-			await ctx.context.internalAdapter.linkAccount({
-				userId: session.user.id,
-				providerId: "credential",
-				accountId: session.user.id,
-				password: passwordHash,
-			});
+			await ctx.context.internalAdapter.linkAccount(
+				{
+					userId: session.user.id,
+					providerId: "credential",
+					accountId: session.user.id,
+					password: passwordHash,
+				},
+				ctx,
+			);
 			return ctx.json({
 				status: true,
 			});
@@ -326,11 +385,23 @@ export const deleteUser = createAuthEndpoint(
 				description: "Delete the user",
 				responses: {
 					"200": {
-						description: "Success",
+						description: "User deletion processed successfully",
 						content: {
 							"application/json": {
 								schema: {
 									type: "object",
+									properties: {
+										success: {
+											type: "boolean",
+											description: "Indicates if the operation was successful",
+										},
+										message: {
+											type: "string",
+											enum: ["User deleted", "Verification email sent"],
+											description: "Status message of the deletion process",
+										},
+									},
+									required: ["success", "message"],
 								},
 							},
 						},
@@ -404,7 +475,12 @@ export const deleteUser = createAuthEndpoint(
 			await ctx.context.internalAdapter.createVerificationValue({
 				value: session.user.id,
 				identifier: `delete-account-${token}`,
-				expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
+				expiresAt: new Date(
+					Date.now() +
+						(ctx.context.options.user.deleteUser?.deleteTokenExpiresIn ||
+							60 * 60 * 24) *
+							1000,
+				),
 			});
 			const url = `${
 				ctx.context.baseURL
@@ -451,6 +527,37 @@ export const deleteUserCallback = createAuthEndpoint(
 			token: z.string(),
 			callbackURL: z.string().optional(),
 		}),
+		use: [originCheck((ctx) => ctx.query.callbackURL)],
+		metadata: {
+			openapi: {
+				description:
+					"Callback to complete user deletion with verification token",
+				responses: {
+					"200": {
+						description: "User successfully deleted",
+						content: {
+							"application/json": {
+								schema: {
+									type: "object",
+									properties: {
+										success: {
+											type: "boolean",
+											description: "Indicates if the deletion was successful",
+										},
+										message: {
+											type: "string",
+											enum: ["User deleted"],
+											description: "Confirmation message",
+										},
+									},
+									required: ["success", "message"],
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	},
 	async (ctx) => {
 		if (!ctx.context.options.user?.deleteUser?.enabled) {
@@ -469,9 +576,6 @@ export const deleteUserCallback = createAuthEndpoint(
 			`delete-account-${ctx.query.token}`,
 		);
 		if (!token || token.expiresAt < new Date()) {
-			if (token) {
-				await ctx.context.internalAdapter.deleteVerificationValue(token.id);
-			}
 			throw new APIError("NOT_FOUND", {
 				message: BASE_ERROR_CODES.INVALID_TOKEN,
 			});
@@ -510,11 +614,6 @@ export const changeEmail = createAuthEndpoint(
 	"/change-email",
 	{
 		method: "POST",
-		query: z
-			.object({
-				currentURL: z.string().optional(),
-			})
-			.optional(),
 		body: z.object({
 			newEmail: z
 				.string({
@@ -532,19 +631,24 @@ export const changeEmail = createAuthEndpoint(
 			openapi: {
 				responses: {
 					"200": {
-						description: "Success",
+						description: "Email change request processed successfully",
 						content: {
 							"application/json": {
 								schema: {
 									type: "object",
 									properties: {
-										user: {
-											type: "object",
-										},
 										status: {
 											type: "boolean",
+											description: "Indicates if the request was successful",
+										},
+										message: {
+											type: "string",
+											enum: ["Email updated", "Verification email sent"],
+											description: "Status message of the email change process",
+											nullable: true,
 										},
 									},
+									required: ["status"],
 								},
 							},
 						},
@@ -561,15 +665,16 @@ export const changeEmail = createAuthEndpoint(
 			});
 		}
 
-		if (ctx.body.newEmail === ctx.context.session.user.email) {
+		const newEmail = ctx.body.newEmail.toLowerCase();
+
+		if (newEmail === ctx.context.session.user.email) {
 			ctx.context.logger.error("Email is the same");
 			throw new APIError("BAD_REQUEST", {
 				message: "Email is the same",
 			});
 		}
-		const existingUser = await ctx.context.internalAdapter.findUserByEmail(
-			ctx.body.newEmail,
-		);
+		const existingUser =
+			await ctx.context.internalAdapter.findUserByEmail(newEmail);
 		if (existingUser) {
 			ctx.context.logger.error("Email already exists");
 			throw new APIError("BAD_REQUEST", {
@@ -580,12 +685,52 @@ export const changeEmail = createAuthEndpoint(
 		 * If the email is not verified, we can update the email
 		 */
 		if (ctx.context.session.user.emailVerified !== true) {
-			const updatedUser = await ctx.context.internalAdapter.updateUserByEmail(
+			const existing =
+				await ctx.context.internalAdapter.findUserByEmail(newEmail);
+			if (existing) {
+				throw new APIError("UNPROCESSABLE_ENTITY", {
+					message: BASE_ERROR_CODES.USER_ALREADY_EXISTS,
+				});
+			}
+			await ctx.context.internalAdapter.updateUserByEmail(
 				ctx.context.session.user.email,
 				{
-					email: ctx.body.newEmail,
+					email: newEmail,
 				},
+				ctx,
 			);
+			await setSessionCookie(ctx, {
+				session: ctx.context.session.session,
+				user: {
+					...ctx.context.session.user,
+					email: newEmail,
+				},
+			});
+			if (ctx.context.options.emailVerification?.sendVerificationEmail) {
+				const token = await createEmailVerificationToken(
+					ctx.context.secret,
+					newEmail,
+					undefined,
+					ctx.context.options.emailVerification?.expiresIn,
+				);
+				const url = `${
+					ctx.context.baseURL
+				}/verify-email?token=${token}&callbackURL=${
+					ctx.body.callbackURL || "/"
+				}`;
+				await ctx.context.options.emailVerification.sendVerificationEmail(
+					{
+						user: {
+							...ctx.context.session.user,
+							email: newEmail,
+						},
+						url,
+						token,
+					},
+					ctx.request,
+				);
+			}
+
 			return ctx.json({
 				status: true,
 			});
@@ -604,17 +749,16 @@ export const changeEmail = createAuthEndpoint(
 		const token = await createEmailVerificationToken(
 			ctx.context.secret,
 			ctx.context.session.user.email,
-			ctx.body.newEmail,
+			newEmail,
+			ctx.context.options.emailVerification?.expiresIn,
 		);
 		const url = `${
 			ctx.context.baseURL
-		}/verify-email?token=${token}&callbackURL=${
-			ctx.body.callbackURL || ctx.query?.currentURL || "/"
-		}`;
+		}/verify-email?token=${token}&callbackURL=${ctx.body.callbackURL || "/"}`;
 		await ctx.context.options.user.changeEmail.sendChangeEmailVerification(
 			{
 				user: ctx.context.session.user,
-				newEmail: ctx.body.newEmail,
+				newEmail: newEmail,
 				url,
 				token,
 			},

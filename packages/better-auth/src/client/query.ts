@@ -24,11 +24,15 @@ export const useAuthQuery = <T>(
 		error: null | BetterFetchError;
 		isPending: boolean;
 		isRefetching: boolean;
+		refetch: () => void;
 	}>({
 		data: null,
 		error: null,
 		isPending: true,
 		isRefetching: false,
+		refetch: () => {
+			return fn();
+		},
 	});
 
 	const fn = () => {
@@ -51,16 +55,25 @@ export const useAuthQuery = <T>(
 						error: null,
 						isPending: false,
 						isRefetching: false,
+						refetch: value.value.refetch,
 					});
 				}
 				await opts?.onSuccess?.(context);
 			},
 			async onError(context) {
+				const { request } = context;
+				const retryAttempts =
+					typeof request.retry === "number"
+						? request.retry
+						: request.retry?.attempts;
+				const retryAttempt = request.retryAttempt || 0;
+				if (retryAttempts && retryAttempt < retryAttempts) return;
 				value.set({
 					error: context.error,
 					data: null,
 					isPending: false,
 					isRefetching: false,
+					refetch: value.value.refetch,
 				});
 				await opts?.onError?.(context);
 			},
@@ -71,6 +84,7 @@ export const useAuthQuery = <T>(
 					data: currentValue.data,
 					error: null,
 					isRefetching: true,
+					refetch: value.value.refetch,
 				});
 				await opts?.onRequest?.(context);
 			},

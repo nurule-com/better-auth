@@ -1,11 +1,12 @@
 import { z } from "zod";
-import { APIError, createAuthEndpoint } from "../../api";
+import { APIError, createAuthEndpoint, createAuthMiddleware } from "../../api";
 import type { BetterAuthPlugin } from "../../types";
 import { generateRandomString } from "../../crypto";
 import { getDate } from "../../utils/date";
 import { setSessionCookie } from "../../cookies";
+import { getEndpointResponse } from "../../utils/plugin-helper";
 
-interface EmailOTPOptions {
+export interface EmailOTPOptions {
 	/**
 	 * Function to send email verification
 	 */
@@ -30,6 +31,16 @@ interface EmailOTPOptions {
 	 */
 	expiresIn?: number;
 	/**
+	 * Custom function to generate otp
+	 */
+	generateOTP?: (
+		data: {
+			email: string;
+			type: "sign-in" | "email-verification" | "forget-password";
+		},
+		request?: Request,
+	) => string;
+	/**
 	 * Send email verification on sign-up
 	 *
 	 * @Default false
@@ -42,6 +53,11 @@ interface EmailOTPOptions {
 	 * @Default false
 	 */
 	disableSignUp?: boolean;
+	/**
+	 * Allowed attempts for the OTP code
+	 * @default 3
+	 */
+	allowedAttempts?: number;
 }
 
 const types = ["email-verification", "sign-in", "forget-password"] as const;
@@ -49,14 +65,15 @@ const types = ["email-verification", "sign-in", "forget-password"] as const;
 export const emailOTP = (options: EmailOTPOptions) => {
 	const opts = {
 		expiresIn: 5 * 60,
-		otpLength: 6,
+		generateOTP: () => generateRandomString(options.otpLength ?? 6, "0-9"),
 		...options,
-	};
+	} satisfies EmailOTPOptions;
 	const ERROR_CODES = {
 		OTP_EXPIRED: "otp expired",
-		INVALID_OTP: "invalid otp",
-		INVALID_EMAIL: "invalid email",
-		USER_NOT_FOUND: "user not found",
+		INVALID_OTP: "Invalid OTP",
+		INVALID_EMAIL: "Invalid email",
+		USER_NOT_FOUND: "User not found",
+		TOO_MANY_ATTEMPTS: "Too many attempts",
 	} as const;
 	return {
 		id: "email-otp",
@@ -107,12 +124,13 @@ export const emailOTP = (options: EmailOTPOptions) => {
 					}
 					const email = ctx.body.email;
 					const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
 					if (!emailRegex.test(email)) {
-						throw new APIError("BAD_REQUEST", {
+						throw ctx.error("BAD_REQUEST", {
 							message: ERROR_CODES.INVALID_EMAIL,
 						});
 					}
-					if (ctx.body.type === "forget-password") {
+					if (ctx.body.type === "forget-password" || opts.disableSignUp) {
 						const user =
 							await ctx.context.internalAdapter.findUserByEmail(email);
 						if (!user) {
@@ -121,10 +139,13 @@ export const emailOTP = (options: EmailOTPOptions) => {
 							});
 						}
 					}
-					const otp = generateRandomString(opts.otpLength, "0-9");
+					const otp = opts.generateOTP(
+						{ email, type: ctx.body.type },
+						ctx.request,
+					);
 					await ctx.context.internalAdapter
 						.createVerificationValue({
-							value: otp,
+							value: `${otp}:0`,
 							identifier: `${ctx.body.type}-otp-${email}`,
 							expiresAt: getDate(opts.expiresIn, "sec"),
 						})
@@ -135,7 +156,7 @@ export const emailOTP = (options: EmailOTPOptions) => {
 							);
 							//try again
 							await ctx.context.internalAdapter.createVerificationValue({
-								value: otp,
+								value: `${otp}:0`,
 								identifier: `${ctx.body.type}-otp-${email}`,
 								expiresAt: getDate(opts.expiresIn, "sec"),
 							});
@@ -186,9 +207,12 @@ export const emailOTP = (options: EmailOTPOptions) => {
 				},
 				async (ctx) => {
 					const email = ctx.body.email;
-					const otp = generateRandomString(opts.otpLength, "0-9");
+					const otp = opts.generateOTP(
+						{ email, type: ctx.body.type },
+						ctx.request,
+					);
 					await ctx.context.internalAdapter.createVerificationValue({
-						value: otp,
+						value: `${otp}:0`,
 						identifier: `${ctx.body.type}-otp-${email}`,
 						expiresAt: getDate(opts.expiresIn, "sec"),
 					});
@@ -210,8 +234,9 @@ export const emailOTP = (options: EmailOTPOptions) => {
 						openapi: {
 							description: "Get verification OTP",
 							responses: {
-								200: {
-									description: "Success",
+								"200": {
+									description:
+										"OTP retrieved successfully or not found/expired",
 									content: {
 										"application/json": {
 											schema: {
@@ -219,8 +244,12 @@ export const emailOTP = (options: EmailOTPOptions) => {
 												properties: {
 													otp: {
 														type: "string",
+														nullable: true,
+														description:
+															"The stored OTP, or null if not found or expired",
 													},
 												},
+												required: ["otp"],
 											},
 										},
 									},
@@ -268,9 +297,22 @@ export const emailOTP = (options: EmailOTPOptions) => {
 											schema: {
 												type: "object",
 												properties: {
+													status: {
+														type: "boolean",
+														description:
+															"Indicates if the verification was successful",
+														enum: [true],
+													},
+													token: {
+														type: "string",
+														nullable: true,
+														description:
+															"Session token if autoSignInAfterVerification is enabled, otherwise null",
+													},
 													user: {
 														$ref: "#/components/schemas/User",
 													},
+													required: ["status", "token", "user"],
 												},
 											},
 										},
@@ -299,15 +341,27 @@ export const emailOTP = (options: EmailOTPOptions) => {
 						});
 					}
 					if (verificationValue.expiresAt < new Date()) {
-						await ctx.context.internalAdapter.deleteVerificationValue(
-							verificationValue.id,
-						);
 						throw new APIError("BAD_REQUEST", {
 							message: ERROR_CODES.OTP_EXPIRED,
 						});
 					}
-					const otp = ctx.body.otp;
-					if (verificationValue.value !== otp) {
+					const [otpValue, attempts] = verificationValue.value.split(":");
+					const allowedAttempts = options?.allowedAttempts || 3;
+					if (attempts && parseInt(attempts) >= allowedAttempts) {
+						await ctx.context.internalAdapter.deleteVerificationValue(
+							verificationValue.id,
+						);
+						throw new APIError("FORBIDDEN", {
+							message: ERROR_CODES.TOO_MANY_ATTEMPTS,
+						});
+					}
+					if (ctx.body.otp !== otpValue) {
+						await ctx.context.internalAdapter.updateVerificationValue(
+							verificationValue.id,
+							{
+								value: `${otpValue}:${parseInt(attempts || "0") + 1}`,
+							},
+						);
 						throw new APIError("BAD_REQUEST", {
 							message: ERROR_CODES.INVALID_OTP,
 						});
@@ -327,6 +381,7 @@ export const emailOTP = (options: EmailOTPOptions) => {
 							email,
 							emailVerified: true,
 						},
+						ctx,
 					);
 
 					if (
@@ -334,21 +389,39 @@ export const emailOTP = (options: EmailOTPOptions) => {
 					) {
 						const session = await ctx.context.internalAdapter.createSession(
 							updatedUser.id,
-							ctx.request,
+							ctx.headers,
 						);
 						await setSessionCookie(ctx, {
 							session,
 							user: updatedUser,
 						});
 						return ctx.json({
-							token: session.token,
 							status: true,
+							token: session.token,
+							user: {
+								id: updatedUser.id,
+								email: updatedUser.email,
+								emailVerified: updatedUser.emailVerified,
+								name: updatedUser.name,
+								image: updatedUser.image,
+								createdAt: updatedUser.createdAt,
+								updatedAt: updatedUser.updatedAt,
+							},
 						});
 					}
 
 					return ctx.json({
 						status: true,
 						token: null,
+						user: {
+							id: updatedUser.id,
+							email: updatedUser.email,
+							emailVerified: updatedUser.emailVerified,
+							name: updatedUser.name,
+							image: updatedUser.image,
+							createdAt: updatedUser.createdAt,
+							updatedAt: updatedUser.updatedAt,
+						},
 					});
 				},
 			),
@@ -375,13 +448,16 @@ export const emailOTP = (options: EmailOTPOptions) => {
 											schema: {
 												type: "object",
 												properties: {
+													token: {
+														type: "string",
+														description:
+															"Session token for the authenticated session",
+													},
 													user: {
 														$ref: "#/components/schemas/User",
 													},
-													session: {
-														$ref: "#/components/schemas/Session",
-													},
 												},
+												required: ["token", "user"],
 											},
 										},
 									},
@@ -402,15 +478,27 @@ export const emailOTP = (options: EmailOTPOptions) => {
 						});
 					}
 					if (verificationValue.expiresAt < new Date()) {
-						await ctx.context.internalAdapter.deleteVerificationValue(
-							verificationValue.id,
-						);
 						throw new APIError("BAD_REQUEST", {
 							message: ERROR_CODES.OTP_EXPIRED,
 						});
 					}
-					const otp = ctx.body.otp;
-					if (verificationValue.value !== otp) {
+					const [otpValue, attempts] = verificationValue.value.split(":");
+					const allowedAttempts = options?.allowedAttempts || 3;
+					if (attempts && parseInt(attempts) >= allowedAttempts) {
+						await ctx.context.internalAdapter.deleteVerificationValue(
+							verificationValue.id,
+						);
+						throw new APIError("FORBIDDEN", {
+							message: ERROR_CODES.TOO_MANY_ATTEMPTS,
+						});
+					}
+					if (ctx.body.otp !== otpValue) {
+						await ctx.context.internalAdapter.updateVerificationValue(
+							verificationValue.id,
+							{
+								value: `${otpValue}:${parseInt(attempts || "0") + 1}`,
+							},
+						);
 						throw new APIError("BAD_REQUEST", {
 							message: ERROR_CODES.INVALID_OTP,
 						});
@@ -425,14 +513,17 @@ export const emailOTP = (options: EmailOTPOptions) => {
 								message: ERROR_CODES.USER_NOT_FOUND,
 							});
 						}
-						const newUser = await ctx.context.internalAdapter.createUser({
-							email,
-							emailVerified: true,
-							name: email,
-						});
+						const newUser = await ctx.context.internalAdapter.createUser(
+							{
+								email,
+								emailVerified: true,
+								name: "",
+							},
+							ctx,
+						);
 						const session = await ctx.context.internalAdapter.createSession(
 							newUser.id,
-							ctx.request,
+							ctx.headers,
 						);
 						await setSessionCookie(ctx, {
 							session,
@@ -440,18 +531,31 @@ export const emailOTP = (options: EmailOTPOptions) => {
 						});
 						return ctx.json({
 							token: session.token,
+							user: {
+								id: newUser.id,
+								email: newUser.email,
+								emailVerified: newUser.emailVerified,
+								name: newUser.name,
+								image: newUser.image,
+								createdAt: newUser.createdAt,
+								updatedAt: newUser.updatedAt,
+							},
 						});
 					}
 
 					if (!user.user.emailVerified) {
-						await ctx.context.internalAdapter.updateUser(user.user.id, {
-							emailVerified: true,
-						});
+						await ctx.context.internalAdapter.updateUser(
+							user.user.id,
+							{
+								emailVerified: true,
+							},
+							ctx,
+						);
 					}
 
 					const session = await ctx.context.internalAdapter.createSession(
 						user.user.id,
-						ctx.request,
+						ctx.headers,
 					);
 					await setSessionCookie(ctx, {
 						session,
@@ -459,6 +563,15 @@ export const emailOTP = (options: EmailOTPOptions) => {
 					});
 					return ctx.json({
 						token: session.token,
+						user: {
+							id: user.user.id,
+							email: user.user.email,
+							emailVerified: user.user.emailVerified,
+							name: user.user.name,
+							image: user.user.image,
+							createdAt: user.user.createdAt,
+							updatedAt: user.user.updatedAt,
+						},
 					});
 				},
 			),
@@ -484,6 +597,8 @@ export const emailOTP = (options: EmailOTPOptions) => {
 												properties: {
 													success: {
 														type: "boolean",
+														description:
+															"Indicates if the OTP was sent successfully",
 													},
 												},
 											},
@@ -502,9 +617,12 @@ export const emailOTP = (options: EmailOTPOptions) => {
 							message: ERROR_CODES.USER_NOT_FOUND,
 						});
 					}
-					const otp = generateRandomString(opts.otpLength, "0-9");
+					const otp = opts.generateOTP(
+						{ email, type: "forget-password" },
+						ctx.request,
+					);
 					await ctx.context.internalAdapter.createVerificationValue({
-						value: otp,
+						value: `${otp}:0`,
 						identifier: `forget-password-otp-${email}`,
 						expiresAt: getDate(opts.expiresIn, "sec"),
 					});
@@ -589,8 +707,23 @@ export const emailOTP = (options: EmailOTPOptions) => {
 							message: ERROR_CODES.OTP_EXPIRED,
 						});
 					}
-					const otp = ctx.body.otp;
-					if (verificationValue.value !== otp) {
+					const [otpValue, attempts] = verificationValue.value.split(":");
+					const allowedAttempts = options?.allowedAttempts || 3;
+					if (attempts && parseInt(attempts) >= allowedAttempts) {
+						await ctx.context.internalAdapter.deleteVerificationValue(
+							verificationValue.id,
+						);
+						throw new APIError("FORBIDDEN", {
+							message: ERROR_CODES.TOO_MANY_ATTEMPTS,
+						});
+					}
+					if (ctx.body.otp !== otpValue) {
+						await ctx.context.internalAdapter.updateVerificationValue(
+							verificationValue.id,
+							{
+								value: `${otpValue}:${parseInt(attempts || "0") + 1}`,
+							},
+						);
 						throw new APIError("BAD_REQUEST", {
 							message: ERROR_CODES.INVALID_OTP,
 						});
@@ -605,16 +738,20 @@ export const emailOTP = (options: EmailOTPOptions) => {
 						(account) => account.providerId === "credential",
 					);
 					if (!account) {
-						await ctx.context.internalAdapter.createAccount({
-							userId: user.user.id,
-							providerId: "credential",
-							accountId: user.user.id,
-							password: passwordHash,
-						});
+						await ctx.context.internalAdapter.createAccount(
+							{
+								userId: user.user.id,
+								providerId: "credential",
+								accountId: user.user.id,
+								password: passwordHash,
+							},
+							ctx,
+						);
 					} else {
 						await ctx.context.internalAdapter.updatePassword(
 							user.user.id,
 							passwordHash,
+							ctx,
 						);
 					}
 
@@ -633,23 +770,18 @@ export const emailOTP = (options: EmailOTPOptions) => {
 							opts.sendVerificationOnSignUp
 						);
 					},
-					async handler(ctx) {
-						const response = ctx.context.returned;
-						if (response instanceof APIError) {
-							return;
-						}
-						const email =
-							response && "email" in response
-								? response.email
-								: response instanceof Response
-									? response.status === 200
-										? ctx.body.email
-										: null
-									: null;
+					handler: createAuthMiddleware(async (ctx) => {
+						const response = await getEndpointResponse<{
+							user: { email: string };
+						}>(ctx);
+						const email = response?.user.email;
 						if (email) {
-							const otp = generateRandomString(opts.otpLength, "0-9");
+							const otp = opts.generateOTP(
+								{ email, type: ctx.body.type },
+								ctx.request,
+							);
 							await ctx.context.internalAdapter.createVerificationValue({
-								value: otp,
+								value: `${otp}:0`,
 								identifier: `email-verification-otp-${email}`,
 								expiresAt: getDate(opts.expiresIn, "sec"),
 							});
@@ -662,10 +794,33 @@ export const emailOTP = (options: EmailOTPOptions) => {
 								ctx.request,
 							);
 						}
-					},
+					}),
 				},
 			],
 		},
 		$ERROR_CODES: ERROR_CODES,
+		rateLimit: [
+			{
+				pathMatcher(path) {
+					return path === "/email-otp/send-verification-otp";
+				},
+				window: 60,
+				max: 3,
+			},
+			{
+				pathMatcher(path) {
+					return path === "/email-otp/verify-email";
+				},
+				window: 60,
+				max: 3,
+			},
+			{
+				pathMatcher(path) {
+					return path === "/sign-in/email-otp";
+				},
+				window: 60,
+				max: 3,
+			},
+		],
 	} satisfies BetterAuthPlugin;
 };

@@ -14,7 +14,6 @@ import { Label } from "@/components/ui/label";
 import { useState } from "react";
 import Image from "next/image";
 import { Loader2, X } from "lucide-react";
-import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 
 export function SignUp() {
@@ -93,6 +92,7 @@ export function SignUp() {
 						<Label htmlFor="password">Password</Label>
 						<Input
 							id="password"
+							type="password"
 							value={password}
 							onChange={(e) => setPassword(e.target.value)}
 							autoComplete="new-password"
@@ -103,6 +103,7 @@ export function SignUp() {
 						<Label htmlFor="password">Confirm Password</Label>
 						<Input
 							id="password_confirmation"
+							type="password"
 							value={passwordConfirmation}
 							onChange={(e) => setPasswordConfirmation(e.target.value)}
 							autoComplete="new-password"
@@ -196,7 +197,7 @@ import { signUp } from "@/lib/auth-client";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 
-export function SignUp() {
+export default function SignUp() {
 	const [firstName, setFirstName] = useState("");
 	const [lastName, setLastName] = useState("");
 	const [email, setEmail] = useState("");

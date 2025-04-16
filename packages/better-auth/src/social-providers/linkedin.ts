@@ -1,6 +1,10 @@
 import { betterFetch } from "@better-fetch/fetch";
 import type { OAuthProvider, ProviderOptions } from "../oauth2";
-import { createAuthorizationURL, validateAuthorizationCode } from "../oauth2";
+import {
+	createAuthorizationURL,
+	validateAuthorizationCode,
+	refreshAccessToken,
+} from "../oauth2";
 
 export interface LinkedInProfile {
 	sub: string;
@@ -26,27 +30,52 @@ export const linkedin = (options: LinkedInOptions) => {
 	return {
 		id: "linkedin",
 		name: "Linkedin",
-		createAuthorizationURL: async ({ state, scopes, redirectURI }) => {
-			const _scopes = scopes || ["profile", "email", "openid"];
+		createAuthorizationURL: async ({
+			state,
+			scopes,
+			redirectURI,
+			loginHint,
+		}) => {
+			const _scopes = options.disableDefaultScope
+				? []
+				: ["profile", "email", "openid"];
 			options.scope && _scopes.push(...options.scope);
+			scopes && _scopes.push(...scopes);
 			return await createAuthorizationURL({
 				id: "linkedin",
 				options,
 				authorizationEndpoint,
 				scopes: _scopes,
 				state,
+				loginHint,
 				redirectURI,
 			});
 		},
 		validateAuthorizationCode: async ({ code, redirectURI }) => {
 			return await validateAuthorizationCode({
 				code,
-				redirectURI: options.redirectURI || redirectURI,
+				redirectURI,
 				options,
 				tokenEndpoint,
 			});
 		},
+		refreshAccessToken: options.refreshAccessToken
+			? options.refreshAccessToken
+			: async (refreshToken) => {
+					return refreshAccessToken({
+						refreshToken,
+						options: {
+							clientId: options.clientId,
+							clientKey: options.clientKey,
+							clientSecret: options.clientSecret,
+						},
+						tokenEndpoint,
+					});
+				},
 		async getUserInfo(token) {
+			if (options.getUserInfo) {
+				return options.getUserInfo(token);
+			}
 			const { data: profile, error } = await betterFetch<LinkedInProfile>(
 				"https://api.linkedin.com/v2/userinfo",
 				{
@@ -74,5 +103,6 @@ export const linkedin = (options: LinkedInOptions) => {
 				data: profile,
 			};
 		},
+		options,
 	} satisfies OAuthProvider<LinkedInProfile>;
 };
