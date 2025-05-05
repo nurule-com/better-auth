@@ -9,7 +9,7 @@ import { BASE_ERROR_CODES } from "../../error/codes";
 import { schema } from "./schema";
 import { mergeSchema } from "../../db/schema";
 import { USERNAME_ERROR_CODES as ERROR_CODES } from "./error-codes";
-
+export * from "./error-codes";
 export type UsernameOptions = {
 	schema?: InferOptionSchema<typeof schema>;
 	/**
@@ -137,7 +137,6 @@ export const username = (options?: UsernameOptions) => {
 						],
 					});
 					if (!user) {
-						await ctx.context.password.hash(ctx.body.password);
 						ctx.context.logger.error("User not found", { username });
 						throw new APIError("UNAUTHORIZED", {
 							message: ERROR_CODES.INVALID_USERNAME_OR_PASSWORD,
